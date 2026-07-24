@@ -45,12 +45,14 @@ export default {
 
 async function createClaim(request, env) {
   const contentType = request.headers.get("content-type") || "";
-  if (!contentType.includes("multipart/form-data")) {
-    return json({ success: false, message: "Form harus dikirim sebagai multipart/form-data." }, 400, request);
-  }
 
-  const form = await request.formData();
-  const body = {
+let body;
+let form = null;
+
+if (contentType.includes("multipart/form-data")) {
+  form = await request.formData();
+
+  body = {
     customerName: clean(form.get("customerName"), 120),
     customerContact: clean(form.get("customerContact"), 40),
     productName: clean(form.get("productName"), 150),
@@ -62,6 +64,28 @@ async function createClaim(request, env) {
     claimType: clean(form.get("claimType"), 40),
     problem: clean(form.get("problem"), 2500)
   };
+} else if (contentType.includes("application/json")) {
+  const jsonBody = await request.json();
+
+  body = {
+    customerName: clean(jsonBody.customerName, 120),
+    customerContact: clean(jsonBody.customerContact, 40),
+    productName: clean(jsonBody.productName, 150),
+    price: clean(jsonBody.price, 40),
+    duration: clean(jsonBody.duration, 80),
+    orderDate: clean(jsonBody.orderDate, 40),
+    orderId: clean(jsonBody.orderId, 100),
+    payment: clean(jsonBody.payment, 80),
+    claimType: clean(jsonBody.claimType, 40),
+    problem: clean(jsonBody.problem, 2500)
+  };
+} else {
+  return json(
+    { success: false, message: "Format request tidak didukung." },
+    400,
+    request
+  );
+}
 
   const errorPhoto = form.get("evidence");
   const purchaseProof = form.get("orderProof");
