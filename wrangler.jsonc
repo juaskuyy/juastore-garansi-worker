@@ -2,13 +2,13 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "juastore-garansi-worker",
   "main": "worker.js",
-  "compatibility_date": "2026-07-25",
+  "compatibility_date": "2025-12-31",
   "workers_dev": true,
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "juastore-garansi",
-      "database_id": "66918a8f-1dc4-414c-937b-517bdfcc2f62"
+      "database_name": "juastore-garansi-db",
+      "database_id": "GANTI_DENGAN_DATABASE_ID_D1"
     }
   ]
 }
