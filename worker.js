@@ -1,241 +1,457 @@
+const JSON_HEADERS = { "content-type": "application/json; charset=UTF-8" };
+
 export default {
   async fetch(request, env) {
-    const cors = {
-      "Access-Control-Allow-Origin": env.ALLOWED_ORIGIN || "*",
-      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type"
-    };
-
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-
     const url = new URL(request.url);
-    const path = url.pathname.replace(/\/+$/, "") || "/";
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders(request) });
+    }
 
     try {
-      if (request.method === "GET" && path === "/") {
-        return json({ success: true, message: "Sistem Garansi API aktif." }, 200, cors);
+      if (request.method === "GET" && url.pathname === "/") {
+        return json({ success: true, message: "Sistem Garansi JuaStore aktif." }, 200, request);
       }
-      if (request.method === "POST" && path === "/api/claims") {
-        return await createClaim(request, env, cors);
+
+      if (request.method === "POST" && url.pathname === "/api/claims") {
+        return await createClaim(request, env);
       }
-      if (request.method === "GET" && path === "/api/status") {
-        return await checkStatus(url, env, cors);
+
+      if (request.method === "GET" && url.pathname === "/api/status") {
+        return await getStatus(request, env);
       }
-      if (request.method === "POST" && path === "/telegram-webhook") {
-        return await telegramWebhook(request, url, env, cors);
+
+      if (request.method === "POST" && url.pathname === "/telegram-webhook") {
+        return await telegramWebhook(request, env);
       }
-      return json({ success: false, message: "Endpoint tidak ditemukan." }, 404, cors);
+
+      if (request.method === "GET" && url.pathname === "/api/admin/claims") {
+        requireAdmin(request, env);
+        return await adminListClaims(request, env);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/admin/status") {
+        requireAdmin(request, env);
+        return await adminUpdateStatus(request, env);
+      }
+
+      return json({ success: false, message: "Endpoint tidak ditemukan." }, 404, request);
     } catch (error) {
-      return json({ success: false, message: error?.message || "Terjadi kesalahan server." }, 500, cors);
+      console.error(error);
+      const status = error.status || 500;
+      return json(
+        { success: false, message: status === 500 ? "Terjadi kesalahan pada server." : error.message },
+        status,
+        request
+      );
     }
   }
 };
 
-async function createClaim(request, env, cors) {
-  if (!env.DB) throw new Error("Binding D1 DB belum dipasang.");
-  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) {
-    throw new Error("Token bot atau Chat ID Telegram belum dipasang.");
+async function createClaim(request, env) {
+  const body = await request.json();
+
+  const required = [
+    "customerName", "customerContact", "productName", "duration",
+    "orderDate", "orderId", "claimType", "problem"
+  ];
+
+  for (const key of required) {
+    if (!String(body[key] ?? "").trim()) {
+      return json({ success: false, message: `Kolom ${key} wajib diisi.` }, 400, request);
+    }
   }
 
-  const form = await request.formData();
-  const get = key => String(form.get(key) || "").trim();
+  const orderId = clean(body.orderId, 100);
+  const existing = await env.DB.prepare(
+    "SELECT id FROM claims WHERE order_id = ? LIMIT 1"
+  ).bind(orderId).first();
 
-  let phone = get("customerContact").replace(/\D/g, "");
-  if (phone.startsWith("0")) phone = "62" + phone.slice(1);
-  else if (phone.startsWith("8")) phone = "62" + phone;
-
-  if (!/^62\d{8,13}$/.test(phone)) {
-    return json({ success: false, message: "Nomor WhatsApp tidak valid." }, 400, cors);
+  if (existing) {
+    return json({ success: false, message: "ID order tersebut sudah pernah digunakan untuk klaim." }, 409, request);
   }
 
-  for (const key of ["customerName", "productName", "orderId", "problem"]) {
-    if (!get(key)) return json({ success: false, message: `Field ${key} wajib diisi.` }, 400, cors);
-  }
-
-  const claimId = `GRN-${new Date().toISOString().slice(0,10).replaceAll("-","")}-${crypto.randomUUID().slice(0,6).toUpperCase()}`;
+  const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
   await env.DB.prepare(`
     INSERT INTO claims (
       id, customer_name, whatsapp, product_name, price, duration,
-      order_date, order_id, payment, claim_type, problem,
-      status, admin_note, telegram_chat_id, telegram_message_id,
-      created_at, updated_at
+      order_date, order_id, payment, claim_type, problem, status,
+      admin_note, telegram_chat_id, telegram_message_id, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
-    claimId, get("customerName"), phone, get("productName"), get("price"),
-    get("duration"), get("orderDate"), get("orderId"), get("payment"),
-    get("claimType") || "Garansi", get("problem"), "Menunggu", "", "", 0, now, now
+    id,
+    clean(body.customerName, 120),
+    clean(body.customerContact, 40),
+    clean(body.productName, 150),
+    clean(body.price, 40),
+    clean(body.duration, 80),
+    clean(body.orderDate, 40),
+    orderId,
+    clean(body.payment, 80),
+    clean(body.claimType, 40),
+    clean(body.problem, 2500),
+    "MENUNGGU",
+    "",
+    "",
+    "",
+    now,
+    now
   ).run();
 
-  const text = [
-    "🛡️ <b>PENGAJUAN GARANSI BARU — JUASTORE</b>", "",
-    `🆔 ID Garansi: <code>${esc(claimId)}</code>`,
-    `👤 Nama: ${esc(get("customerName"))}`,
-    `📱 WhatsApp: <code>${esc(phone)}</code>`, "",
-    `📦 Produk: ${esc(get("productName"))}`,
-    `💰 Harga: Rp ${esc(get("price") || "0")}`,
-    `⏳ Durasi: ${esc(get("duration") || "-")}`,
-    `📅 Tanggal Order: ${esc(get("orderDate") || "-")}`,
-    `🧾 ID Order: ${esc(get("orderId"))}`,
-    `💳 Pembayaran: ${esc(get("payment") || "-")}`,
-    `🛡 Jenis: ${esc(get("claimType") || "Garansi")}`, "",
-    "<b>📝 Masalah / Kendala:</b>", esc(get("problem")), "",
-    "⏱ <b>Status:</b> Menunggu"
-  ].join("\n");
+  let telegramWarning = null;
 
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: "✅ Terima", callback_data: `claim:${claimId}:Diterima` },
-        { text: "🟡 Proses", callback_data: `claim:${claimId}:Diproses` },
-        { text: "❌ Tolak", callback_data: `claim:${claimId}:Ditolak` }
-      ],
-      [{ text: "💬 Balas WhatsApp", url: waLink(phone, claimId) }]
-    ]
-  };
-
-  const base = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
-  const evidence = form.get("evidence");
-  let response;
-
-  if (evidence && typeof evidence !== "string" && evidence.size > 0) {
-    if (evidence.size > 5 * 1024 * 1024) {
-      return json({ success: false, message: "Screenshot maksimal 5 MB." }, 400, cors);
-    }
-    const tg = new FormData();
-    tg.append("chat_id", env.TELEGRAM_CHAT_ID);
-    tg.append("caption", text.slice(0, 1024));
-    tg.append("parse_mode", "HTML");
-    tg.append("reply_markup", JSON.stringify(keyboard));
-    tg.append("photo", evidence, evidence.name || "bukti.jpg");
-    response = await fetch(`${base}/sendPhoto`, { method: "POST", body: tg });
-  } else {
-    response = await fetch(`${base}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: env.TELEGRAM_CHAT_ID,
-        text,
-        parse_mode: "HTML",
-        disable_web_page_preview: true,
-        reply_markup: keyboard
-      })
+  try {
+    const sent = await sendTelegramClaim(env, {
+      id,
+      customerName: clean(body.customerName, 120),
+      customerContact: clean(body.customerContact, 40),
+      productName: clean(body.productName, 150),
+      price: clean(body.price, 40),
+      duration: clean(body.duration, 80),
+      orderDate: clean(body.orderDate, 40),
+      orderId,
+      payment: clean(body.payment, 80),
+      claimType: clean(body.claimType, 40),
+      problem: clean(body.problem, 2500),
+      evidence: clean(body.evidence, 1000),
+      status: "MENUNGGU"
     });
+
+    if (sent?.result?.message_id) {
+      await env.DB.prepare(`
+        UPDATE claims
+        SET telegram_chat_id = ?, telegram_message_id = ?, updated_at = ?
+        WHERE id = ?
+      `).bind(
+        String(sent.result.chat.id),
+        String(sent.result.message_id),
+        new Date().toISOString(),
+        id
+      ).run();
+    }
+  } catch (error) {
+    console.error("Telegram gagal:", error);
+    telegramWarning = "Klaim tersimpan, tetapi notifikasi Telegram gagal dikirim.";
   }
 
-  const raw = await response.text();
-  let telegram;
-  try { telegram = JSON.parse(raw); }
-  catch { throw new Error("Respons Telegram bukan JSON: " + raw.slice(0, 200)); }
-  if (!telegram.ok) throw new Error(telegram.description || "Telegram API gagal.");
-
-  await env.DB.prepare(`UPDATE claims SET telegram_chat_id=?, telegram_message_id=?, updated_at=? WHERE id=?`)
-    .bind(String(telegram.result?.chat?.id || ""), Number(telegram.result?.message_id || 0), new Date().toISOString(), claimId)
-    .run();
-
-  return json({ success: true, ok: true, claimId, warrantyId: claimId, message: "Pengajuan berhasil dikirim." }, 200, cors);
+  return json({
+    success: true,
+    message: telegramWarning || "Klaim berhasil dikirim.",
+    data: { id, orderId, status: "MENUNGGU" },
+    warning: telegramWarning
+  }, 201, request);
 }
 
-async function checkStatus(url, env, cors) {
-  if (!env.DB) throw new Error("Binding D1 DB belum dipasang.");
+async function getStatus(request, env) {
+  const url = new URL(request.url);
   const q = String(url.searchParams.get("q") || "").trim();
-  if (!q) return json({ success: false, message: "Masukkan ID garansi atau nomor WhatsApp." }, 400, cors);
 
-  let normalized = q;
-  if (!q.toUpperCase().startsWith("GRN-")) {
-    normalized = q.replace(/\D/g, "");
-    if (normalized.startsWith("0")) normalized = "62" + normalized.slice(1);
-    else if (normalized.startsWith("8")) normalized = "62" + normalized;
-  } else normalized = q.toUpperCase();
+  if (!q) {
+    return json({ success: false, message: "Masukkan ID order atau nomor WhatsApp." }, 400, request);
+  }
 
-  const result = await env.DB.prepare(`
-    SELECT id, whatsapp, product_name, duration, order_id, claim_type,
-           status, admin_note, created_at, updated_at
-    FROM claims WHERE id=? OR whatsapp=? ORDER BY created_at DESC LIMIT 20
-  `).bind(normalized, normalized).all();
+  const row = await env.DB.prepare(`
+    SELECT
+      id, customer_name, whatsapp, product_name, price, duration,
+      order_date, order_id, payment, claim_type, problem, status,
+      admin_note, created_at, updated_at
+    FROM claims
+    WHERE order_id = ? OR whatsapp = ?
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).bind(q, q).first();
 
-  return json({ success: true, data: result.results || [] }, 200, cors);
+  if (!row) {
+    return json({ success: false, message: "Data klaim tidak ditemukan." }, 404, request);
+  }
+
+  return json({ success: true, data: row }, 200, request);
 }
 
-async function telegramWebhook(request, url, env, cors) {
-  const key = url.searchParams.get("key") || "";
-  if (!env.TELEGRAM_WEBHOOK_SECRET || key !== env.TELEGRAM_WEBHOOK_SECRET) {
-    return json({ success: false, message: "Webhook ditolak." }, 401, cors);
+async function telegramWebhook(request, env) {
+  const url = new URL(request.url);
+  if (env.WEBHOOK_SECRET && url.searchParams.get("secret") !== env.WEBHOOK_SECRET) {
+    return json({ success: false, message: "Webhook secret tidak valid." }, 403, request);
   }
 
   const update = await request.json();
+
+  if (!update.callback_query) {
+    return json({ success: true, ignored: true }, 200, request);
+  }
+
   const callback = update.callback_query;
-  if (!callback) return json({ success: true }, 200, cors);
+  const [action, claimId] = String(callback.data || "").split(":");
 
-  const parts = String(callback.data || "").split(":");
-  if (parts.length !== 3 || parts[0] !== "claim") return json({ success: true }, 200, cors);
+  const statusMap = {
+    accept: "DITERIMA",
+    process: "DIPROSES",
+    reject: "DITOLAK"
+  };
 
-  const claimId = parts[1];
-  const status = parts[2];
-  if (!["Diterima", "Diproses", "Ditolak"].includes(status)) return json({ success: true }, 200, cors);
+  const newStatus = statusMap[action];
 
-  await env.DB.prepare(`UPDATE claims SET status=?, updated_at=? WHERE id=?`)
-    .bind(status, new Date().toISOString(), claimId).run();
+  if (!newStatus || !claimId) {
+    await telegramApi(env, "answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: "Aksi tidak valid.",
+      show_alert: true
+    });
+    return json({ success: false, message: "Callback tidak valid." }, 400, request);
+  }
 
-  const base = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
-  await fetch(`${base}/answerCallbackQuery`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ callback_query_id: callback.id, text: `Status: ${status}` })
+  const claim = await env.DB.prepare(`
+    SELECT * FROM claims WHERE id = ? LIMIT 1
+  `).bind(claimId).first();
+
+  if (!claim) {
+    await telegramApi(env, "answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: "Data klaim tidak ditemukan.",
+      show_alert: true
+    });
+    return json({ success: false, message: "Klaim tidak ditemukan." }, 404, request);
+  }
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(`
+    UPDATE claims SET status = ?, updated_at = ? WHERE id = ?
+  `).bind(newStatus, now, claimId).run();
+
+  await telegramApi(env, "answerCallbackQuery", {
+    callback_query_id: callback.id,
+    text: `Status diubah menjadi ${newStatus}.`
   });
 
-  const row = await env.DB.prepare(`SELECT whatsapp FROM claims WHERE id=?`).bind(claimId).first();
-  const message = callback.message;
-  const oldText = message.caption || message.text || "";
-  const statusLine = `⏱ <b>Status:</b> ${esc(status)}`;
-  const newText = /⏱\s*<b>Status:<\/b>.*$/m.test(oldText)
-    ? oldText.replace(/⏱\s*<b>Status:<\/b>.*$/m, statusLine)
-    : `${oldText}\n\n${statusLine}`;
+  const updated = { ...claim, status: newStatus, updated_at: now };
+  const chatId = callback.message?.chat?.id || claim.telegram_chat_id;
+  const messageId = callback.message?.message_id || claim.telegram_message_id;
 
-  const keyboard = {
+  if (chatId && messageId) {
+    await telegramApi(env, "editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text: buildTelegramText(updated),
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      reply_markup: buildKeyboard(claimId)
+    });
+  }
+
+  return json({ success: true, status: newStatus }, 200, request);
+}
+
+async function adminListClaims(request, env) {
+  const url = new URL(request.url);
+  const status = String(url.searchParams.get("status") || "").trim();
+  const q = String(url.searchParams.get("q") || "").trim();
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 100), 1), 500);
+
+  let sql = `
+    SELECT
+      id, customer_name, whatsapp, product_name, price, duration,
+      order_date, order_id, payment, claim_type, problem, status,
+      admin_note, created_at, updated_at
+    FROM claims
+  `;
+  const where = [];
+  const binds = [];
+
+  if (status) {
+    where.push("status = ?");
+    binds.push(status);
+  }
+
+  if (q) {
+    where.push("(order_id LIKE ? OR whatsapp LIKE ? OR customer_name LIKE ? OR product_name LIKE ?)");
+    const like = `%${q}%`;
+    binds.push(like, like, like, like);
+  }
+
+  if (where.length) sql += ` WHERE ${where.join(" AND ")}`;
+  sql += " ORDER BY created_at DESC LIMIT ?";
+  binds.push(limit);
+
+  const result = await env.DB.prepare(sql).bind(...binds).all();
+  return json({ success: true, data: result.results || [] }, 200, request);
+}
+
+async function adminUpdateStatus(request, env) {
+  const body = await request.json();
+  const id = String(body.id || "").trim();
+  const status = String(body.status || "").trim().toUpperCase();
+  const adminNote = clean(body.adminNote, 1000);
+
+  const allowed = ["MENUNGGU", "DIPROSES", "DITERIMA", "DITOLAK"];
+  if (!id || !allowed.includes(status)) {
+    return json({ success: false, message: "ID atau status tidak valid." }, 400, request);
+  }
+
+  const claim = await env.DB.prepare("SELECT * FROM claims WHERE id = ? LIMIT 1").bind(id).first();
+  if (!claim) {
+    return json({ success: false, message: "Klaim tidak ditemukan." }, 404, request);
+  }
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(`
+    UPDATE claims SET status = ?, admin_note = ?, updated_at = ? WHERE id = ?
+  `).bind(status, adminNote, now, id).run();
+
+  const updated = { ...claim, status, admin_note: adminNote, updated_at: now };
+
+  if (claim.telegram_chat_id && claim.telegram_message_id) {
+    try {
+      await telegramApi(env, "editMessageText", {
+        chat_id: claim.telegram_chat_id,
+        message_id: claim.telegram_message_id,
+        text: buildTelegramText(updated),
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        reply_markup: buildKeyboard(id)
+      });
+    } catch (error) {
+      console.error("Gagal mengedit pesan Telegram:", error);
+    }
+  }
+
+  return json({ success: true, message: "Status berhasil diperbarui.", data: updated }, 200, request);
+}
+
+async function sendTelegramClaim(env, claim) {
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) {
+    throw new Error("Secret Telegram belum diatur.");
+  }
+
+  return await telegramApi(env, "sendMessage", {
+    chat_id: env.TELEGRAM_CHAT_ID,
+    text: buildTelegramText({
+      id: claim.id,
+      customer_name: claim.customerName,
+      whatsapp: claim.customerContact,
+      product_name: claim.productName,
+      price: claim.price,
+      duration: claim.duration,
+      order_date: claim.orderDate,
+      order_id: claim.orderId,
+      payment: claim.payment,
+      claim_type: claim.claimType,
+      problem: claim.problem,
+      evidence: claim.evidence,
+      status: claim.status
+    }),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: buildKeyboard(claim.id)
+  });
+}
+
+function buildKeyboard(id) {
+  return {
     inline_keyboard: [
       [
-        { text: "✅ Terima", callback_data: `claim:${claimId}:Diterima` },
-        { text: "🟡 Proses", callback_data: `claim:${claimId}:Diproses` },
-        { text: "❌ Tolak", callback_data: `claim:${claimId}:Ditolak` }
-      ],
-      [{ text: "💬 Balas WhatsApp", url: waLink(row?.whatsapp || "", claimId) }]
+        { text: "✅ Terima", callback_data: `accept:${id}` },
+        { text: "⏳ Proses", callback_data: `process:${id}` },
+        { text: "❌ Tolak", callback_data: `reject:${id}` }
+      ]
     ]
   };
+}
 
-  const method = message.photo ? "editMessageCaption" : "editMessageText";
-  const payload = {
-    chat_id: message.chat.id,
-    message_id: message.message_id,
-    parse_mode: "HTML",
-    reply_markup: keyboard
+function buildTelegramText(c) {
+  const evidence = c.evidence
+    ? `<a href="${escapeHtml(c.evidence)}">Buka bukti</a>`
+    : "-";
+
+  return [
+    "🛡️ <b>KLAIM GARANSI JUASTORE</b>",
+    "",
+    `🆔 <b>ID Order:</b> ${escapeHtml(c.order_id || "-")}`,
+    `👤 <b>Nama:</b> ${escapeHtml(c.customer_name || "-")}`,
+    `📱 <b>WhatsApp:</b> ${escapeHtml(c.whatsapp || "-")}`,
+    `📦 <b>Produk:</b> ${escapeHtml(c.product_name || "-")}`,
+    `💰 <b>Harga:</b> ${escapeHtml(c.price || "-")}`,
+    `⏳ <b>Durasi:</b> ${escapeHtml(c.duration || "-")}`,
+    `📅 <b>Tanggal Order:</b> ${escapeHtml(c.order_date || "-")}`,
+    `💳 <b>Pembayaran:</b> ${escapeHtml(c.payment || "-")}`,
+    `📋 <b>Jenis Klaim:</b> ${escapeHtml(c.claim_type || "-")}`,
+    "",
+    `⚠️ <b>Kendala:</b>\n${escapeHtml(c.problem || "-")}`,
+    "",
+    `📸 <b>Bukti:</b> ${evidence}`,
+    `📌 <b>Status:</b> ${escapeHtml(c.status || "MENUNGGU")}`,
+    c.admin_note ? `📝 <b>Catatan Admin:</b> ${escapeHtml(c.admin_note)}` : ""
+  ].filter(Boolean).join("\n");
+}
+
+async function telegramApi(env, method, payload) {
+  const response = await fetch(
+    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`,
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(payload)
+    }
+  );
+
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    throw new Error(data.description || `Telegram API ${method} gagal.`);
+  }
+  return data;
+}
+
+function requireAdmin(request, env) {
+  if (!env.ADMIN_KEY) {
+    const error = new Error("ADMIN_KEY belum diatur.");
+    error.status = 500;
+    throw error;
+  }
+
+  const url = new URL(request.url);
+  const supplied =
+    request.headers.get("x-admin-key") ||
+    request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ||
+    url.searchParams.get("key");
+
+  if (supplied !== env.ADMIN_KEY) {
+    const error = new Error("Akses admin ditolak.");
+    error.status = 401;
+    throw error;
+  }
+}
+
+function clean(value, max = 500) {
+  return String(value ?? "").trim().slice(0, max);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function corsHeaders(request) {
+  const origin = request.headers.get("origin") || "*";
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "Content-Type, Authorization, X-Admin-Key",
+    "access-control-max-age": "86400",
+    "vary": "Origin"
   };
-  if (message.photo) payload.caption = newText.slice(0, 1024);
-  else payload.text = newText;
-
-  await fetch(`${base}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-
-  return json({ success: true }, 200, cors);
 }
 
-function waLink(phone, claimId) {
-  return `https://wa.me/${phone}?text=${encodeURIComponent(`Halo, pengajuan garansi JuaStore ${claimId} sedang kami tindak lanjuti.`)}`;
-}
-
-function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, c => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  }[c]));
-}
-
-function json(data, status, headers) {
+function json(data, status = 200, request = null) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { ...headers, "Content-Type": "application/json; charset=UTF-8", "Cache-Control": "no-store" }
+    headers: {
+      ...JSON_HEADERS,
+      ...(request ? corsHeaders(request) : {})
+    }
   });
 }
