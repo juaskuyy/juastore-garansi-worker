@@ -153,7 +153,18 @@ async function sendTelegramClaim(env, claim) {
     throw new Error("Secret Telegram belum diatur.");
   }
 
-  console.log("Mengirim foto kendala...");
+  console.log("Foto kendala:", {
+  name: claim.errorPhoto?.name,
+  size: claim.errorPhoto?.size,
+  type: claim.errorPhoto?.type
+});
+
+console.log("Bukti pembelian:", {
+  name: claim.purchaseProof?.name,
+  size: claim.purchaseProof?.size,
+  type: claim.purchaseProof?.type
+});
+
 await sendTelegramPhoto(
   env,
   env.TELEGRAM_CHAT_ID,
@@ -161,14 +172,12 @@ await sendTelegramPhoto(
   `📷 Foto Kendala / Error\n🆔 ${claim.orderId}`
 );
 
-console.log("Mengirim bukti pembelian...");
 await sendTelegramPhoto(
   env,
   env.TELEGRAM_CHAT_ID,
   claim.purchaseProof,
   `🧾 Bukti Pembelian\n🆔 ${claim.orderId}`
 );
-
 console.log("Kedua foto berhasil dikirim.");
 
   return await telegramApi(env, "sendMessage", {
@@ -194,20 +203,39 @@ console.log("Kedua foto berhasil dikirim.");
 }
 
 async function sendTelegramPhoto(env, chatId, file, caption) {
+  if (!(file instanceof File) || file.size === 0) {
+    throw new Error(`File tidak tersedia: ${caption}`);
+  }
+
   const fd = new FormData();
   fd.append("chat_id", String(chatId));
   fd.append("caption", caption);
-  fd.append("photo", new Blob([await file.arrayBuffer()], { type: file.type }), file.name || "image.jpg");
+  fd.append("photo", file, file.name || "image.jpg");
 
-  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
-    method: "POST",
-    body: fd
-  });
+  const response = await fetch(
+    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`,
+    {
+      method: "POST",
+      body: fd
+    }
+  );
+
   const data = await response.json();
-  if (!response.ok || !data.ok) throw new Error(data.description || "Telegram sendPhoto gagal.");
+
+  console.log("Telegram sendPhoto:", {
+    caption,
+    fileName: file.name,
+    fileSize: file.size,
+    status: response.status,
+    response: data
+  });
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data.description || "Telegram sendPhoto gagal.");
+  }
+
   return data;
 }
-
 async function getStatus(request, env) {
   const url = new URL(request.url);
   const q = String(url.searchParams.get("q") || "").trim();
