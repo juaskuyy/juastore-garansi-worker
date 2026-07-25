@@ -287,10 +287,10 @@ async function adminListClaims(request, env) {
 
   if (status) { where.push("status = ?"); binds.push(status); }
   if (q) {
-    where.push("(order_id LIKE ? OR whatsapp LIKE ? OR customer_name LIKE ? OR product_name LIKE ?)");
-    const like = `%${q}%`;
-    binds.push(like, like, like, like);
+  where.push("id = ?");
+  binds.push(q.trim());
   }
+  
   if (where.length) sql += ` WHERE ${where.join(" AND ")}`;
   sql += " ORDER BY created_at DESC LIMIT ?";
   binds.push(limit);
