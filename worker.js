@@ -165,18 +165,12 @@ console.log("Bukti pembelian:", {
   type: claim.purchaseProof?.type
 });
 
-await sendTelegramPhoto(
+await sendTelegramPhotos(
   env,
   env.TELEGRAM_CHAT_ID,
   claim.errorPhoto,
-  `📷 Foto Kendala / Error\n🆔 ${claim.orderId}`
-);
-
-await sendTelegramPhoto(
-  env,
-  env.TELEGRAM_CHAT_ID,
   claim.purchaseProof,
-  `🧾 Bukti Pembelian\n🆔 ${claim.orderId}`
+  claim.orderId
 );
 console.log("Kedua foto berhasil dikirim.");
 
@@ -202,10 +196,71 @@ console.log("Kedua foto berhasil dikirim.");
   });
 }
 
-async function sendTelegramPhoto(env, chatId, file, caption) {
-  if (!(file instanceof File) || file.size === 0) {
-    throw new Error(`File tidak tersedia: ${caption}`);
+async function sendTelegramPhotos(
+  env,
+  chatId,
+  errorPhoto,
+  purchaseProof,
+  orderId
+) {
+  if (!(errorPhoto instanceof File) || errorPhoto.size === 0) {
+    throw new Error("Foto kendala tidak tersedia.");
   }
+
+  if (!(purchaseProof instanceof File) || purchaseProof.size === 0) {
+    throw new Error("Bukti pembelian tidak tersedia.");
+  }
+
+  const formData = new FormData();
+
+  formData.append("chat_id", String(chatId));
+
+  formData.append(
+    "media",
+    JSON.stringify([
+      {
+        type: "photo",
+        media: "attach://error_photo",
+        caption: `📷 Foto Kendala / Error\n🆔 ${orderId}`
+      },
+      {
+        type: "photo",
+        media: "attach://purchase_proof",
+        caption: `🧾 Bukti Pembelian\n🆔 ${orderId}`
+      }
+    ])
+  );
+
+  formData.append(
+    "error_photo",
+    errorPhoto,
+    errorPhoto.name || "error-photo.jpg"
+  );
+
+  formData.append(
+    "purchase_proof",
+    purchaseProof,
+    purchaseProof.name || "purchase-proof.jpg"
+  );
+
+  const response = await fetch(
+    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMediaGroup`,
+    {
+      method: "POST",
+      body: formData
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok || !data.ok) {
+    throw new Error(
+      data.description || "Gagal mengirim kedua foto ke Telegram."
+    );
+  }
+
+  return data;
+}
 
   const fd = new FormData();
   fd.append("chat_id", String(chatId));
