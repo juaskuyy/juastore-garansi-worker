@@ -165,13 +165,23 @@ console.log("Bukti pembelian:", {
   type: claim.purchaseProof?.type
 });
 
-await sendTelegramPhotos(
+const fotoKendala = await sendTelegramPhoto(
   env,
   env.TELEGRAM_CHAT_ID,
   claim.errorPhoto,
-  claim.purchaseProof,
-  claim.orderId
+  `📷 FOTO KENDALA / ERROR\n🆔 ${claim.orderId}`
 );
+
+console.log("Foto kendala terkirim:", fotoKendala.result?.message_id);
+
+const buktiPembelian = await sendTelegramPhoto(
+  env,
+  env.TELEGRAM_CHAT_ID,
+  claim.purchaseProof,
+  `🧾 BUKTI PEMBELIAN\n🆔 ${claim.orderId}`
+);
+
+console.log("Bukti pembelian terkirim:", buktiPembelian.result?.message_id);
 console.log("Kedua foto berhasil dikirim.");
 
   return await telegramApi(env, "sendMessage", {
@@ -196,101 +206,53 @@ console.log("Kedua foto berhasil dikirim.");
   });
 }
 
-async function sendTelegramPhotos(
-  env,
-  chatId,
-  errorPhoto,
-  purchaseProof,
-  orderId
-) {
-  if (!(errorPhoto instanceof File) || errorPhoto.size === 0) {
-    throw new Error("Foto kendala tidak tersedia.");
-  }
-
-  if (!(purchaseProof instanceof File) || purchaseProof.size === 0) {
-    throw new Error("Bukti pembelian tidak tersedia.");
+async function sendTelegramPhoto(env, chatId, file, caption) {
+  if (!(file instanceof File) || file.size === 0) {
+    throw new Error(`File kosong: ${caption}`);
   }
 
   const formData = new FormData();
-
   formData.append("chat_id", String(chatId));
+  formData.append("caption", caption);
 
-  formData.append(
-    "media",
-    JSON.stringify([
-      {
-        type: "photo",
-        media: "attach://error_photo",
-        caption: `📷 Foto Kendala / Error\n🆔 ${orderId}`
-      },
-      {
-        type: "photo",
-        media: "attach://purchase_proof",
-        caption: `🧾 Bukti Pembelian\n🆔 ${orderId}`
-      }
-    ])
+  const blob = new Blob(
+    [await file.arrayBuffer()],
+    { type: file.type || "image/jpeg" }
   );
 
   formData.append(
-    "error_photo",
-    errorPhoto,
-    errorPhoto.name || "error-photo.jpg"
-  );
-
-  formData.append(
-    "purchase_proof",
-    purchaseProof,
-    purchaseProof.name || "purchase-proof.jpg"
+    "photo",
+    blob,
+    file.name || `foto-${Date.now()}.jpg`
   );
 
   const response = await fetch(
-    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMediaGroup`,
+    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`,
     {
       method: "POST",
       body: formData
     }
   );
 
-  const data = await response.json();
+  const result = await response.json();
 
-  if (!response.ok || !data.ok) {
+  console.log("Hasil kirim foto:", {
+    caption,
+    nama: file.name,
+    ukuran: file.size,
+    status: response.status,
+    result
+  });
+
+  if (!response.ok || !result.ok) {
     throw new Error(
-      data.description || "Gagal mengirim kedua foto ke Telegram."
+      result.description || `Gagal mengirim: ${caption}`
     );
   }
 
-  return data;
-}
-
-  const fd = new FormData();
-  fd.append("chat_id", String(chatId));
-  fd.append("caption", caption);
-  fd.append("photo", file, file.name || "image.jpg");
-
-  const response = await fetch(
-    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`,
-    {
-      method: "POST",
-      body: fd
-    }
-  );
-
-  const data = await response.json();
-
-  console.log("Telegram sendPhoto:", {
-    caption,
-    fileName: file.name,
-    fileSize: file.size,
-    status: response.status,
-    response: data
-  });
-
-  if (!response.ok || !data.ok) {
-    throw new Error(data.description || "Telegram sendPhoto gagal.");
+  return result;
   }
 
-  return data;
-}
 async function getStatus(request, env) {
   const url = new URL(request.url);
   const q = String(url.searchParams.get("q") || "").trim();
