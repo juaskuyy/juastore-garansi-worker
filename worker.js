@@ -88,7 +88,6 @@ if (contentType.includes("multipart/form-data")) {
 }
 
   const errorPhoto = form.get("evidence");
-  const purchaseProof = form.get("orderProof");
   const required = ["customerName", "customerContact", "productName", "duration", "orderDate", "orderId", "claimType", "problem"];
 
   for (const key of required) {
@@ -97,8 +96,7 @@ if (contentType.includes("multipart/form-data")) {
     }
   }
 
-  const fileError = validateImageFile(errorPhoto, "Foto kendala/error") || validateImageFile(purchaseProof, "Bukti pembelian");
-  if (fileError) return json({ success: false, message: fileError }, 400, request);
+  const fileError = validateImageFile(errorPhoto, "Foto kendala/error"); return json({ success: false, message: fileError }, 400, request);
 
   const existing = await env.DB.prepare("SELECT id FROM claims WHERE order_id = ? LIMIT 1").bind(body.orderId).first();
   if (existing) {
@@ -122,7 +120,7 @@ if (contentType.includes("multipart/form-data")) {
 
   let telegramWarning = null;
   try {
-    const sent = await sendTelegramClaim(env, { id, ...body, status: "MENUNGGU", errorPhoto, purchaseProof });
+    const sent = await sendTelegramClaim(env, { id, ...body, status: "MENUNGGU", errorPhoto });
     if (sent?.result?.message_id) {
       await env.DB.prepare(`
         UPDATE claims SET telegram_chat_id = ?, telegram_message_id = ?, updated_at = ? WHERE id = ?
@@ -159,11 +157,6 @@ async function sendTelegramClaim(env, claim) {
   type: claim.errorPhoto?.type
 });
 
-console.log("Bukti pembelian:", {
-  name: claim.purchaseProof?.name,
-  size: claim.purchaseProof?.size,
-  type: claim.purchaseProof?.type
-});
 
 const fotoKendala = await sendTelegramPhoto(
   env,
@@ -173,16 +166,6 @@ const fotoKendala = await sendTelegramPhoto(
 );
 
 console.log("Foto kendala terkirim:", fotoKendala.result?.message_id);
-
-const buktiPembelian = await sendTelegramPhoto(
-  env,
-  env.TELEGRAM_CHAT_ID,
-  claim.purchaseProof,
-  `🧾 BUKTI PEMBELIAN\n🆔 ${claim.orderId}`
-);
-
-console.log("Bukti pembelian terkirim:", buktiPembelian.result?.message_id);
-console.log("Kedua foto berhasil dikirim.");
 
   return await telegramApi(env, "sendMessage", {
     chat_id: env.TELEGRAM_CHAT_ID,
@@ -420,7 +403,6 @@ function buildTelegramText(c) {
     `📋 <b>Jenis Klaim:</b> ${escapeHtml(c.claim_type || "-")}`,
     "", `⚠️ <b>Kendala:</b>\n${escapeHtml(c.problem || "-")}`, "",
     "📸 <b>Foto kendala:</b> sudah dikirim di atas",
-    "🧾 <b>Bukti pembelian:</b> sudah dikirim di atas",
     `📌 <b>Status:</b> ${escapeHtml(c.status || "MENUNGGU")}`,
     c.admin_note ? `📝 <b>Catatan Admin:</b> ${escapeHtml(c.admin_note)}` : ""
   ].filter(Boolean).join("\n");
