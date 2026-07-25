@@ -88,15 +88,40 @@ if (contentType.includes("multipart/form-data")) {
 }
 
   const errorPhoto = form.get("evidence");
-  const required = ["customerName", "customerContact", "productName", "duration", "orderDate", "orderId", "claimType", "problem"];
+  const required = [
+    "customerName",
+    "customerContact",
+    "productName",
+    "duration",
+    "orderDate",
+    "orderId",
+    "claimType",
+    "problem"
+  ];
 
   for (const key of required) {
     if (!body[key]) {
-      return json({ success: false, message: `Kolom ${key} wajib diisi.` }, 400, request);
+      return json(
+        { success: false, message: `Kolom ${key}
+        wajib diisi.` },
+        400,
+        request
+      );
     }
   }
 
-  const fileError = validateImageFile(errorPhoto, "Foto kendala/error"); return json({ success: false, message: fileError }, 400, request);
+  const fileError = validateImageFile(
+    errorPhoto,
+   "Foto kendala/error"
+  );
+
+if (fileError) {
+  return json(
+    { success: false, message: fileError },
+    400,
+    request
+  );
+}
 
   const existing = await env.DB.prepare("SELECT id FROM claims WHERE order_id = ? LIMIT 1").bind(body.orderId).first();
   if (existing) {
