@@ -210,7 +210,7 @@ console.log("Foto kendala terkirim:", fotoKendala.result?.message_id);
     }),
     parse_mode: "HTML",
     disable_web_page_preview: true,
-    reply_markup: buildKeyboard(claim.id)
+    reply_markup: buildKeyboard(claim.id, claim.customerContact, claim.productName, claim.orderId, claim.status)
   });
 }
 
@@ -334,7 +334,7 @@ async function telegramWebhook(request, env) {
       text: buildTelegramText(updated),
       parse_mode: "HTML",
       disable_web_page_preview: true,
-      reply_markup: buildKeyboard(claimId)
+      reply_markup: buildKeyboard(claimId, claim.whatsapp, claim.product_name, claim.order_id, newStatus)
     });
   }
 
@@ -394,7 +394,7 @@ async function adminUpdateStatus(request, env) {
         text: buildTelegramText(updated),
         parse_mode: "HTML",
         disable_web_page_preview: true,
-        reply_markup: buildKeyboard(id)
+        reply_markup: buildKeyboard(id, claim.whatsapp, claim.product_name, claim.order_id, status)
       });
     } catch (error) {
       console.error("Gagal mengedit pesan Telegram:", error);
@@ -404,13 +404,57 @@ async function adminUpdateStatus(request, env) {
   return json({ success: true, message: "Status berhasil diperbarui.", data: updated }, 200, request);
 }
 
-function buildKeyboard(id) {
+function buildKeyboard(
+  id,
+  whatsapp = "",
+  productName = "-",
+  orderId = "-",
+  status = "DIPROSES"
+) {
+  const nomor = String(whatsapp || "").replace(/\D/g, "");
+  const product = String(productName || "-").trim();
+  const order = String(orderId || "-").trim();
+
+  const statusLabel = {
+    MENUNGGU: "Menunggu Diproses",
+    DIPROSES: "Sedang Diproses",
+    DITERIMA: "Diterima",
+    DITOLAK: "Ditolak"
+  }[String(status || "").toUpperCase()] || "Sedang Diproses";
+
+  const pesanWhatsApp = `Halo,
+
+Terima kasih telah mengajukan klaim garansi di JuaStore.
+
+📦 Produk: ${product}
+🆔 ID Order: ${order}
+📌 Status: ${statusLabel}
+
+🤖 Ini adalah pesan otomatis dari sistem JuaStore. Mohon tidak membalas pesan ini. Admin kami akan menghubungi dan memberikan informasi terbaru mengenai klaim Anda secepat mungkin pada jam operasional.
+
+Terima kasih atas kesabaran dan pengertiannya.
+
+— JuaStore`;
+
+  const keyboard = [];
+
+  if (nomor) {
+    keyboard.push([
+      {
+        text: "💬 Balas WhatsApp",
+        url: `https://wa.me/${nomor}?text=${encodeURIComponent(pesanWhatsApp)}`
+      }
+    ]);
+  }
+
+  keyboard.push([
+    { text: "✅ Terima", callback_data: `accept:${id}` },
+    { text: "⏳ Proses", callback_data: `process:${id}` },
+    { text: "❌ Tolak", callback_data: `reject:${id}` }
+  ]);
+
   return {
-    inline_keyboard: [[
-      { text: "✅ Terima", callback_data: `accept:${id}` },
-      { text: "⏳ Proses", callback_data: `process:${id}` },
-      { text: "❌ Tolak", callback_data: `reject:${id}` }
-    ]]
+    inline_keyboard: keyboard
   };
 }
 
