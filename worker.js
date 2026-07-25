@@ -213,7 +213,10 @@ async function getStatus(request, env) {
 
 async function telegramWebhook(request, env) {
   const url = new URL(request.url);
-  if (env.WEBHOOK_SECRET && url.searchParams.get("secret") !== env.WEBHOOK_SECRET) {
+  if (
+  env.TELEGRAM_WEBHOOK_SECRET &&
+  url.searchParams.get("secret") !== env.TELEGRAM_WEBHOOK_SECRET
+) {
     return json({ success: false, message: "Webhook secret tidak valid." }, 403, request);
   }
 
