@@ -153,8 +153,23 @@ async function sendTelegramClaim(env, claim) {
     throw new Error("Secret Telegram belum diatur.");
   }
 
-  await sendTelegramPhoto(env, env.TELEGRAM_CHAT_ID, claim.errorPhoto, `📷 Foto Kendala / Error\n🆔 ${claim.orderId}`);
-  await sendTelegramPhoto(env, env.TELEGRAM_CHAT_ID, claim.purchaseProof, `🧾 Bukti Pembelian\n🆔 ${claim.orderId}`);
+  console.log("Mengirim foto kendala...");
+await sendTelegramPhoto(
+  env,
+  env.TELEGRAM_CHAT_ID,
+  claim.errorPhoto,
+  `📷 Foto Kendala / Error\n🆔 ${claim.orderId}`
+);
+
+console.log("Mengirim bukti pembelian...");
+await sendTelegramPhoto(
+  env,
+  env.TELEGRAM_CHAT_ID,
+  claim.purchaseProof,
+  `🧾 Bukti Pembelian\n🆔 ${claim.orderId}`
+);
+
+console.log("Kedua foto berhasil dikirim.");
 
   return await telegramApi(env, "sendMessage", {
     chat_id: env.TELEGRAM_CHAT_ID,
